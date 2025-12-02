@@ -20,36 +20,28 @@ app.use(express.urlencoded({ extended: true }));
  * CWA 氣象資料開放平臺 API
  * 使用「一般天氣預報-今明 36 小時天氣預報」資料集
  */
+// getWeather 只回傳資料，不使用 res
 async function getWeather(location) {
+  if (!CWA_API_KEY) {
+    const error = new Error("請在 .env 檔案中設定 CWA_API_KEY");
+    error.status = 500;
+    throw error;
+  }
+
   try {
-    // 檢查是否有設定 API Key
-    if (!CWA_API_KEY) {
-      return res.status(500).json({
-        error: "伺服器設定錯誤",
-        message: "請在 .env 檔案中設定 CWA_API_KEY",
-      });
-    }
+    const response = await axios.get(`${CWA_API_BASE_URL}/v1/rest/datastore/F-C0032-001`, {
+      params: {
+        Authorization: CWA_API_KEY,
+        locationName: location,
+      },
+    });
 
-    // 呼叫 CWA API - 一般天氣預報（36小時）
-    // API 文件: https://opendata.cwa.gov.tw/dist/opendata-swagger.html
-    const response = await axios.get(
-      `${CWA_API_BASE_URL}/v1/rest/datastore/F-C0032-001`,
-      {
-        params: {
-          Authorization: CWA_API_KEY,
-          locationName: location,
-        },
-      }
-    );
-
-    // 取得天氣資料
     const locationData = response.data.records.location[0];
 
     if (!locationData) {
-      return res.status(404).json({
-        error: "查無資料",
-        message: `無法取得 ${location} 天氣資料`,
-      });
+      const error = new Error(`無法取得 ${location} 天氣資料`);
+      error.status = 404;
+      throw error;
     }
 
     // 整理天氣資料
@@ -59,7 +51,6 @@ async function getWeather(location) {
       forecasts: [],
     };
 
-    // 解析天氣要素
     const weatherElements = locationData.weatherElement;
     const timeCount = weatherElements[0].time.length;
 
@@ -78,53 +69,33 @@ async function getWeather(location) {
       weatherElements.forEach((element) => {
         const value = element.time[i].parameter;
         switch (element.elementName) {
-          case "Wx":
-            forecast.weather = value.parameterName;
-            break;
-          case "PoP":
-            forecast.rain = value.parameterName + "%";
-            break;
-          case "MinT":
-            forecast.minTemp = value.parameterName + "°C";
-            break;
-          case "MaxT":
-            forecast.maxTemp = value.parameterName + "°C";
-            break;
-          case "CI":
-            forecast.comfort = value.parameterName;
-            break;
-          case "WS":
-            forecast.windSpeed = value.parameterName;
-            break;
+          case "Wx": forecast.weather = value.parameterName; break;
+          case "PoP": forecast.rain = value.parameterName + "%"; break;
+          case "MinT": forecast.minTemp = value.parameterName + "°C"; break;
+          case "MaxT": forecast.maxTemp = value.parameterName + "°C"; break;
+          case "CI": forecast.comfort = value.parameterName; break;
+          case "WS": forecast.windSpeed = value.parameterName; break;
         }
       });
 
       weatherData.forecasts.push(forecast);
     }
 
-    res.json({
-      success: true,
-      data: weatherData,
-    });
+    return weatherData; // ✅ 回傳給路由
   } catch (error) {
     console.error("取得天氣資料失敗:", error.message);
 
     if (error.response) {
-      // API 回應錯誤
-      return res.status(error.response.status).json({
-        error: "CWA API 錯誤",
-        message: error.response.data.message || "無法取得天氣資料",
-        details: error.response.data,
-      });
+      const err = new Error(error.response.data.message || "CWA API 錯誤");
+      err.status = error.response.status;
+      throw err;
     }
 
-    // 其他錯誤
-    res.status(500).json({
-      error: "伺服器錯誤",
-      message: "無法取得天氣資料，請稍後再試",
-    });
+    const err = new Error("無法取得天氣資料，請稍後再試");
+    err.status = 500;
+    throw err;
   }
-};
+}
 
 // Routes
 app.get("/", (req, res) => {
@@ -145,6 +116,7 @@ app.get("/api/health", (req, res) => {
 // Weather 代理路由
 app.get("/api/weather/:location", async (req, res) => {
   const location = req.params.location;
+  console.log(`取得 ${location} 天氣資料`);
   try {
     const data = await getWeather(location);
     res.json({ success: true, data });
